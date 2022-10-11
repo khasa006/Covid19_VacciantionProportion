@@ -1,0 +1,234 @@
+---
+title: "PHC 6701: Project 3"
+subtitle: "CDC COVID-19 Data Visualization"
+author: "Alvonee, Lea and Tanvir"
+date: "2022-07-29"
+output: word_document
+toc: TRUE
+---
+
+
+
+
+# Introduction 
+
+The SARS-CoV-2 virus, commonly known as the coronavirus, has caused the widespread COVID-19 pandemic since March 13th of 2020. The incubation period of the virus ranges from 2-14 days with disproportionate effects on the immunocompromised, older populations, as well as those with comorbidities. Once infected, a person can either be asymptomatic or they can have an illness ranging in severity and can even result in death. There was uncertainty at the beginning of the pandemic regarding those who would be most at risk or who would be impacted at a disproportionate level. Health officials at the Center for Disease Control (CDC) and the World Health Organization (WHO) began daily and weekly reports that reflected the constant changes in health protocols and mandates.  Given the need for public safety, The NIH responded quickly to allocate funds to slow the spread of this virus and so the development of vaccines quickly began.
+
+The vaccine development process can take an average of 2-8 years but was expedited and completed in 8 months during the COVID-19 Pandemic since the three phase trials were combined. Operation WARP Speed was essential in bringing some relief by helping try to achieve herd immunity through “accelerating the development, production and distribution of COVID-19 vaccines therapeutics and diagnostics to produce and deliver 300 million doses of safe and effective vaccines with the initial doses available in January of 2021” (U.S. Department of Defense, 2021). However, there were a lot of conspiracy theories and doubt in the quality and goal of the vaccine products. The public health response to the pandemic and its subsequent impact on the economy became politicized and contributed to some reports of vaccine hesitancy that is still present.
+
+On December 11th, 2020, one month before the intended release, vaccines were finally approved to be administered. However, it was declared that those who are 65+ years old would be prioritized into becoming vaccinated against the virus. Since the rollout began, the frequent changes in health mandates and rapid development of the vaccine contributed to the disorganization of data reporting. The CDC COVID-19 data, shows no indication of vaccine uptake until April 12th of 2021. By April, first responders, healthcare workers and other groups of people had already been administered with the vaccine. Hence, there is an observable discrepancy in data that is available from the CDC that we worked on.
+
+Before the analysis we performed a sanity check. The purpose of this was to randomly cross-check our data and ensure that it is consistent and functional.
+
+From the data that was available (till July 26, 2022) and wrangled, it was clear that the CDC had utilized an estimate population of 2018 to obtain the proportion of those aged 65+ vaccinated in 2021 and in 2022. Once we were able to identify and locate the true estimated population of 2021 and 2022 from the Florida Department of Health, we merged this population into the CDC raw data set and then renamed some of the original columns to have an understandable visual of vaccination trends. We then selected three counties to investigate further: Miami-Dade, Broward, and Palm Beach. <https://www.flhealthcharts.gov/FLQUERY_New/Population/Count>.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 9, 
+  fig.height = 5, 
+  dpi = 720
+)
+```
+
+```{r dataset-preparion}
+# Load required libraries
+library(readxl)
+library(lubridate)
+library(tidyverse)
+
+# get the names of all the CDC data files
+dataFile_char <- list.files("data_CDC_raw/", pattern = ".xlsx")
+dataPath_char <- paste0("data_CDC_raw/", dataFile_char)
+
+# read county population data 
+CountyPopulation2021_df <- read_excel(
+  "county_population_20210515.xlsx", 
+  skip = 4
+) %>% 
+  rename(
+    County = Agegroup2, 
+    `65-74` = `65-74...36`, 
+    `75-84` = `75-84...37`,
+    `85+` = `85+...38`
+  ) %>% 
+  filter(County %in% c("Miami-Dade", "Broward", "Palm Beach")) %>% 
+  mutate(
+    `65-74` = as.numeric(
+       as.character(gsub(",","", `65-74`))
+    ),
+    `75-84` = as.numeric(
+      as.character(gsub(",","", `75-84`))
+    ),
+    `85+` = as.numeric(
+       as.character(gsub(",","", `85+`))
+    )
+  ) %>% 
+  select(County, `65-74`, `75-84`, `85+`) %>% 
+  mutate(population = rowSums(across(where(is.numeric)))) %>% 
+  mutate(
+    # change county name to math both datasets
+    County = replace(County, County == "Miami-Dade",  "Miami-Dade County, FL"),
+    County = replace(County, County == "Broward",  "Broward County, FL"),
+    County = replace(County, County == "Palm Beach",  "Palm Beach County, FL")
+  ) %>% 
+  select(County, population)
+```
+
+```{r function}
+#  make a function
+ImportSFL <- function(
+    filePath_char,
+    sheetName = "Counties",
+    FIPScode_int = c(12086, 12011, 12099)) {
+
+  out_df <- 
+    readxl::read_xlsx(
+      path = filePath_char,
+      sheet = sheetName,
+      skip = 1
+    ) %>%
+    filter(`FIPS code` %in% FIPScode_int)
+  
+  # this assumes an 8-digit date in the file name (assuming YYYYMMDD)
+  out_df$Date <- ymd(str_extract(filePath_char, pattern = "\\d{8}"))
+  out_df
+  
+}
+
+#  Apply the Function 
+data_df <- map(
+  .x = dataPath_char,
+  .f = ImportSFL
+) %>% 
+  map(~{ mutate(.x, across(`FEMA region`, as.double)) }) %>%
+  bind_rows() %>% 
+  select(
+    Date,
+    County, 
+    `People who are fully vaccinated - ages 65+`, 
+  )
+```
+
+```{r join-dataset}
+COVID_df <- full_join(data_df, CountyPopulation2021_df, by = "County") %>% 
+  mutate(
+    `Proportion Vaccinated, 65+` =
+      `People who are fully vaccinated - ages 65+` / population
+  ) %>% 
+  filter(Date > "2021-04-11")
+```
+
+
+
+
+# Analysis
+
+
+
+## Proportion Vaccinated, 65+ (Using 2021 Provisional Poplation)
+
+```{r plot-vaccination-proportion}
+ggplot(data = COVID_df) +
+  
+  aes(
+    x = Date,
+    y = `Proportion Vaccinated, 65+`,
+    color = County
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  scale_color_brewer(palette = "Dark2") +
+  labs (
+    title = "65+ Vaccinated Proportion",
+    x = "Date",
+    y = "Proportion Vaccinated, 65+"
+  ) +
+  theme(legend.position = "bottom") +
+  
+  geom_line() 
+```
+
+Palm Beach County has a high demographic profile of those who are 65+ in age which accounts for 24% of the population compared to Broward County (22.5%), and Miami-Dade County (16.9%). At this time, hesitancy was high which is why we observe a lower vaccination rate at the start of the roll out as demonstrated in the graph above. In all three counties, the Department of Health (DOH) directed people 65 and older to call an appointment hotline to get their vaccine since daily time slots were very limited. This led to frustrations amongst the elderly feeling left out and no longer trusting that they were a priority. Additionally, the hotline and the vaccines sites could not facilitate the high demands due to the low supply of vaccines which is again reflected in the early portion of the graph (April of 2021, about 60% vaccinated in Miami-Dade, 63% in Broward, and 66% in Palm Beach County). Potentially the reason why the Miami-Dade vaccination proportion was low in the beginning compared to Palm Beach is simply because it has a lower population of those who are 65+ as mentioned earlier. 
+
+As time went on, it was shown that vaccine uptake in those 65+ continued to increase in all three counties. In the graph the 2021 was population was utilized as the denominator to calculate the proportion of 65+ vaccinated where it was demonstrated that Broward County had the highest uptake of vaccine rate followed by Miami-Dade and then Palm Beach County.
+
+
+
+## Additional Graph (Using 2022 Provisional Poplation)
+
+We decided to go ahead and model a second graph where we used the 2022 provisional population. We see an increase in the 2022 population thus far, which may have been due to the political and economic change in Florida potentially motivating people to migrate relocate (i.e., gas prices, political beliefs, mandates, etc.). When we used the 2022 population as the denominator to calculate the proportion of 65+ vaccinated, it is now demonstrated that Miami-Dade is the leading of these three counties at ~91% of vaccination rate, whereas Broward is at ~90% and Palm Beach County is at ~87%.
+
+```{r extra-graph}
+CountyPopulation2022_df <- read_excel(
+  "Population by Year by County_2022 (1).xlsx", 
+  skip = 4
+) %>% 
+  rename(
+    County = Agegroup2, 
+    `65-74` = `65-74...36`, 
+    `75-84` = `75-84...37`, 
+    `85+` = `85+...38`
+  ) %>% 
+  filter(County %in% c("Miami-Dade", "Broward", "Palm Beach")) %>% 
+  mutate(
+    `65-74` = as.numeric(
+      as.character(gsub(",","", `65-74`))
+    ),
+    `75-84` = as.numeric(
+      as.character(gsub(",","", `75-84`))
+    ),
+    `85+` = as.numeric(
+      as.character(gsub(",","", `85+`))
+    )
+  ) %>% 
+  select(County, `65-74`, `75-84`, `85+`) %>% 
+  mutate(population = rowSums(across(where(is.numeric)))) %>% 
+  mutate(
+    County = replace(County, County == "Miami-Dade",  "Miami-Dade County, FL"),
+    County = replace(County, County == "Broward",  "Broward County, FL"),
+    County = replace(County, County == "Palm Beach",  "Palm Beach County, FL")
+  ) %>% 
+  select(County, population)
+
+COVID2022_df <- full_join(data_df, CountyPopulation2022_df, by = "County") %>% 
+  mutate(
+    `Proportion Vaccinated, 65+` =
+      `People who are fully vaccinated - ages 65+` / population
+  ) %>% 
+  filter(Date > "2021-04-11")
+
+ggplot(data = COVID2022_df) +
+  
+  aes(
+    x = Date,
+    y = `Proportion Vaccinated, 65+`,
+    color = County
+  ) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+  scale_color_brewer(palette = "Dark2") +
+  labs (
+    title = "65+ Vaccinated Proportion",
+    x = "Date",
+    y = "Proportion Vaccinated, 65+"
+  ) +
+  theme(legend.position = "bottom") +
+  
+  geom_line() 
+```
+
+
+
+
+# Conclusion:
+
+Throughout this pandemic, a few things have been clear: 
+
+* Public health was neglected resulting in a lack of health response from different entities, data collection was not consistent and there was a lot of reluctance to take life-saving vaccines. 
+
+* There is no doubt that political beliefs have played a role in the response to this pandemic. 
+
+* Although people have been slow in receiving the vaccine, currently 67.8% of the population in Florida is vaccinated. This indicates that most of those 65+ have received the vaccine (~92%) which is demonstrated by our graphs. This positive trend in vaccine uptake amongst those who are 65+ is promising since this population is the most vulnerable.
+
+
